@@ -1,0 +1,16 @@
+pandas
+numpy
+requests
+openai 
+anthropic 
+google-generativeai 
+xai-sdk 
+deepseek-sdk
+transformers
+detoxify
+scikit-learn
+tqdm
+seaborn
+matplotlib
+python-dotenv
+joblib

@@ -1,9 +1,10 @@
 pandas
 numpy
 requests
+accelerate
 openai 
 anthropic 
-google-generativeai 
+google
 xai-sdk 
 deepseek-sdk
 transformers
@@ -14,3 +15,6 @@ seaborn
 matplotlib
 python-dotenv
 joblib
+glob
+vaderSentiment
+nltk

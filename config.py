@@ -1,41 +1,26 @@
 import os
 from dotenv import load_dotenv
-load_dotenv()  # reads APIs
+load_dotenv()  # read APIs
 
 MODELS = {
-    "GPT-4o": {
-        "type": "openai",
-        "model": "gpt-4o",
-        "api_key_env": "OPENAI_API_KEY"
-    },
-    "Gemini": {
-        "type": "google",
-        "model": "gemini-pro",
-        "api_key_env": "GOOGLE_API_KEY"
-    },
-    "Claude": {
-        "type": "anthropic",
-        "model": "claude-2",
-        "api_key_env": "ANTHROPIC_API_KEY"
-    },
-    "Grok": {
-        "type": "xai",
-        "model": "grok-4",
-        "api_key_env": "GROK_API_KEY"
-    },
-    "Deepseek": {
-        "type": "deepseek",
-        "model": "deepseek-v3",
-        "api_key_env": "DEEPSEEK_API_KEY"
-    },
-    "llama": {
-        "type": "hf",
-        "model": "meta-llama/Llama-3.3-70B-Instruct"
-    },
-    "BioBERT": {
-        "type": "hf",
-        "model": "dmis-lab/biobert-base-cased-v1.1"
-    }
+    # lightweight models for main run
+    "GPT-3.5":   {"type": "openai",    "model": "gpt-3.5-turbo"},
+    "Gemini":    {"type": "google",    "model": "gemini-2.5-flash"},
+    "Claude":    {"type": "anthropic", "model": "claude-3-5-haiku-20241022"},
+    "Grok":      {"type": "xai",       "model": "grok-3-mini"},
+    "Deepseek":  {"type": "deepseek",  "model": "deepseek-v2.5-1210"},
+    
+    # open-weight baselines
+    "llama":     {"type": "hf",        "model": "meta-llama/Meta-Llama-3-70B-Instruct"},  
+    "mistral":   {"type": "hf",        "model": "mistralai/Mistral-7B-Instruct-v0.3"},
+    "biobert":   {"type": "hf",        "model": "dmis-lab/biobert-base-cased-v1.2"},
+
+    # heavy models for validation
+    "GPT-4o":        {"type": "openai",    "model": "gpt-4o"},
+    "Gemini-Pro":    {"type": "google",    "model": "gemini-2.5-pro"},
+    "Claude-Sonnet": {"type": "anthropic", "model": "claude-3-sonnet"},
+    "Grok-4":        {"type": "xai",       "model": "grok-4"},
+    "Deepseek-R1":   {"type": "deepseek",  "model": "deepseek-reasoner"}
 }
 
 

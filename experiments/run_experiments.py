@@ -1,70 +1,107 @@
-from dotenv import load_dotenv
-load_dotenv()
-
-import sys
+import os
 import pandas as pd
-import random
-from tqdm.auto import tqdm
-
+from tqdm import tqdm
+from dotenv import load_dotenv
 from experiments.call_llm import call_llm
-from config import MODELS, TEMPERATURES, PROMPT_STYLES
-from load import load_bbq
+from config import MODELS, TEMPERATURES, 
+from load import load_bbq  # <--- Import your loading function
 
-# open‑source models (full corpus)
-FREE_MODELS = {"llama", "mistral", "biobert"}
+ROOT_DIR = "master_thesis"
+RESULTS_DIR = os.path.join(ROOT_DIR, "results")
+os.makedirs(RESULTS_DIR, exist_ok=True)
 
-def stratified_sample(df, n_per_cat=100, seed=42):
-    """Return n_per_cat examples per 'category' from df."""
-    return (
-        df.groupby("category", group_keys=False)
-          .apply(lambda g: g.sample(n=min(n_per_cat, len(g)), random_state=seed))
-          .reset_index(drop=True)
-    )
+bbq_df = load_bbq()
 
-def run_for_model(model_name: str):
-    df_full = load_bbq()
-    records = []
+if "prompt" not in bbq_df.columns:
+    bbq_df["prompt"] = bbq_df["context"] + " " + bbq_df["question"]
 
-    is_free = model_name in FREE_MODELS
+required_cols = ["example_id", "category", "prompt_style", "prompt"]
+for col in required_cols:
+    if col not in bbq_df.columns:
+        raise ValueError(f"Column {col} is missing from the BBQ dataframe!")
 
-    # decide which rows to run
-    if is_free:
-        to_run = df_full.itertuples()
-    else:
-        paid_slice = stratified_sample(df_full, n_per_cat=100)
-        to_run = paid_slice.itertuples()
 
-    desc = f"Running {model_name}"
-    for row in tqdm(to_run, total=len(df_full) if is_free else len(paid_slice), desc=desc):
-        for style, template in PROMPT_STYLES.items():
-            prompt = template.format(context=row.context, question=row.question)
-            for temp in TEMPERATURES:
-                out = call_llm(model_name, prompt, temp)
-                rec = row._asdict()
-                rec.update({
-                    "model": model_name,
-                    "prompt_style": style,
-                    "temperature": temp,
-                    "response": out
-                })
-                records.append(rec)
 
-    results = pd.DataFrame(records)
-    out_path = f"results/llm_responses_{model_name}.parquet"
-    results.to_parquet(out_path, index=False)
-    print(f"Done! {model_name}: collected {len(results)} rows → {out_path}")
+# sample 100 prompts per category
+subset = (
+    bbq_df.groupby("category", group_keys=False)
+    .apply(lambda x: x.sample(n=100, random_state=42))
+    .reset_index(drop=True)
+)
 
-if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("Usage: python -m experiments.run_experiments <model_name>")
-        print("Available models:", ", ".join(MODELS.keys()))
-        sys.exit(1)
+print(f"Running model: {MODELS} on {len(subset)} prompts × {len(TEMPERATURES)} temperatures")
 
-    model = sys.argv[1]
-    if model not in MODELS:
-        print(f"Error: unknown model '{model}'.  Choose from {list(MODELS.keys())}")
-        sys.exit(1)
+# create batch
+BATCH_SIZE = 4 if MODELS.lower() in ["gemini", "grok", "claude", "gpt-4o", "deepseek"] else 8
 
-    run_for_model(model)
+records = []
+
+# main loop
+for temp in TEMPERATURES:
+    print(f"\nProcessing temperature: {temp}")
+
+    for i in tqdm(range(0, len(subset), BATCH_SIZE)):
+        batch = subset.iloc[i:i+BATCH_SIZE]
+
+        outputs = []
+        for prompt in batch.prompt.tolist():
+            try:
+                out = call_llm(MODELS, prompt, temp)
+            except Exception as e:
+                out = f"[ERROR] {str(e)}"
+            outputs.append(out)
+
+        # save batch results
+        for r, out in zip(batch.to_dict(orient='records'), outputs):
+            records.append({
+                "model": MODELS,
+                "example_id": r["example_id"],
+                "category": r["category"],
+                "style": r["prompt_style"],
+                "temp": temp,
+                "response": out
+            })
+
+# save results
+responses = pd.DataFrame(records)
+output_file = os.path.join(RESULTS_DIR, f"{MODELS}_outputs.csv")
+responses.to_csv(output_file, index=False)
+print(f"Results saved to: {output_file}")
+print(f"Total responses collected: {len(responses)}")
+
+# ------------------------
+# validation run on heavy models
+validation_subset = (
+    bbq_df.groupby("category", group_keys=False)
+    .apply(lambda x: x.sample(n=10, random_state=123))
+    .reset_index(drop=True)
+)
+
+print(f"\nRunning validation for model: {MODELS}")
+print(f"Validation subset size: {len(validation_subset)} prompts × {len(TEMPERATURES)} temperatures")
+
+val_records = []
+for temp in TEMPERATURES:
+    print(f"\nProcessing temperature: {temp}")
+    for _, row in tqdm(validation_subset.iterrows(), total=len(validation_subset)):
+        try:
+            out = call_llm(MODELS, row.prompt, temp)
+        except Exception as e:
+            out = f"[ERROR] {str(e)}"
+
+        val_records.append({
+            "model": MODELS,
+            "example_id": row["example_id"],
+            "category": row["category"],
+            "style": row["prompt_style"],
+            "temp": temp,
+            "response": out
+        })
+
+# save reuslts
+df_val = pd.DataFrame(val_records)
+val_file = os.path.join(RESULTS_DIR, f"{MODELS}_validation.csv")
+df_val.to_csv(val_file, index=False)
+print(f"Validation results saved to {val_file}")
 
 

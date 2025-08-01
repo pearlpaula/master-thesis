@@ -2,115 +2,92 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import os
-import openai
-from openai import OpenAI as OpenAIClient
-import anthropic
-import google.generativeai as genai
-from transformers import pipeline
 from config import MODELS
+from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM, AutoModelForMaskedLM
+import anthropic, openai
+from google import genai
+from xai_sdk import Client
+from xai_sdk.chat import user
 
-def call_llm(name: str, prompt: str, temp: float) -> str:
+PIPE_CACHE = {}
+
+# Initialize API clients
+from openai import OpenAI
+client_openai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+client_xai = Client(api_key=os.getenv("GROK_API_KEY"))
+client_google = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+
+def call_llm(name, prompt, temp):
     cfg = MODELS[name]
-    kind = cfg["type"]
+    t = cfg["type"]
 
-    if kind == "openai":
-        openai.api_key = os.getenv(cfg["api_key_env"])
-        resp = openai.chat.completions.create(
+    # ----- OpenAI -----
+    if t == "openai":
+        resp = client_openai.chat.completions.create(
             model=cfg["model"],
-            messages=[{"role":"user", "content":prompt}],
-            temperature=temp,
-            max_tokens=128
+            messages=[{"role": "user", "content": prompt}],
+            temperature=temp, max_tokens=128
         )
-        return resp.choices[0].message["content"].strip()
+        return resp.choices[0].message.content.strip()
 
-    elif kind == "deepseek":
-        client = OpenAIClient(
-            api_key=os.getenv(cfg["api_key_env"]),
+    # ----- Anthropic Claude -----
+    if t == "anthropic":
+        client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+        msg = client.messages.create(
+            model=cfg["model"], temperature=temp, max_tokens=128,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return msg.content[0].text.strip()
+
+    # ----- Google Gemini -----
+    if t == "google":
+        resp = client_google.models.generate_content(
+            model=cfg["model"],
+            contents=prompt,
+            config={"temperature": temp, "max_output_tokens": 128}
+        )
+        return resp.text.strip()
+
+    # ----- DeepSeek -----
+    if t == "deepseek":
+        client = openai.OpenAI(
+            api_key=os.getenv("DEEPSEEK_API_KEY"),
             base_url="https://api.deepseek.com"
         )
         resp = client.chat.completions.create(
             model=cfg["model"],
-            messages=[{"role":"user","content":prompt}],
-            temperature=temp,
-            max_tokens=128
+            messages=[{"role": "user", "content": prompt}],
+            temperature=temp, max_tokens=128
         )
-        return resp.choices[0].message["content"].strip()
+        return resp.choices[0].message.content.strip()
 
-    elif kind == "anthropic":
-        client = anthropic.Client(api_key=os.getenv(cfg["api_key_env"]))
-        full_prompt = anthropic.HUMAN_PROMPT + prompt + anthropic.AI_PROMPT
-        resp = client.completions.create(
-            model=cfg["model"],
-            prompt=full_prompt,
-            temperature=temp,
-            max_tokens_to_sample=128
-        )
-        return resp.completion.strip()
+    # ----- XAI Grok -----
+    if t == "xai":
+        chat = client_xai.chat.create(model=cfg["model"], temperature=temp)
+        chat.append(user(prompt))
+        response = chat.sample()
+        return response.content.strip()
 
-    elif kind == "google":
-        genai.configure(api_key=os.getenv(cfg["api_key_env"]))
-        resp = genai.generate_text(
-            model=cfg["model"],
-            prompt=prompt,
-            temperature=temp,
-            max_output_tokens=128
-        )
-        return resp.candidates[0].text.strip()
+    # ----- HuggingFace (LLaMA, Mistral, BioBERT) -----
+    if t == "hf":
+        if name not in PIPE_CACHE:
+            if "biobert" in cfg["model"].lower():
+                tokenizer = AutoTokenizer.from_pretrained(cfg["model"])
+                model = AutoModelForMaskedLM.from_pretrained(cfg["model"])
+                PIPE_CACHE[name] = pipeline("fill-mask", model=model, tokenizer=tokenizer, device_map="auto")
+            else:
+                tokenizer = AutoTokenizer.from_pretrained(cfg["model"])
+                model = AutoModelForCausalLM.from_pretrained(
+                    cfg["model"], device_map="auto", torch_dtype="auto"
+                )
+                PIPE_CACHE[name] = pipeline("text-generation", model=model, tokenizer=tokenizer)
 
-    elif kind == "xai":
-        client = OpenAIClient(
-            api_key=os.getenv(cfg["api_key_env"]),
-            base_url="https://api.x.ai/v1"
-        )
-        resp = client.chat.completions.create(
-            model=cfg["model"],     # "grok-4"
-            messages=[{"role":"user","content":prompt}],
-            temperature=temp,
-            max_tokens=128
-        )
-        return resp.choices[0].message["content"].strip()
-
-    elif kind == "hf":
-        model_name = cfg["model"]
-        if any(x in model_name.lower() for x in ["llama", "mistral"]):
-            gen = pipeline(
-                "text-generation",
-                model=model_name,
-                tokenizer=model_name,
-                device_map="auto",
-                torch_dtype="auto"
-            )
-            return gen(
-                [{"role":"user","content":prompt}],
-                max_new_tokens=128,
-                do_sample=True,
-                temperature=temp
-            )[0]["generated_text"]
-
-        # Mask‑fill style (BioBERT)
-        elif "biobert" in model_name.lower():
-            fill = pipeline("fill-mask", model=model_name, tokenizer=model_name)
-            # you need to append a “[MASK]” token to your prompt
-            masked = prompt if "[MASK]" in prompt else prompt + " [MASK]"
-            candidates = fill(masked, top_k=1)
-            return candidates[0]["sequence"]
-
-        # fallback for any other HF text‑gen
+        pipe = PIPE_CACHE[name]
+        if "biobert" in cfg["model"].lower():
+            masked_prompt = prompt.replace("Answer:", "[MASK]") if "Answer:" in prompt else prompt.strip() + " [MASK]"
+            return pipe(masked_prompt, top_k=1)[0]["sequence"]
         else:
-            gen = pipeline(
-                "text-generation",
-                model=model_name,
-                tokenizer=model_name,
-                device_map="auto",
-                torch_dtype="auto"
-            )
-            return gen(
-                prompt,
-                max_new_tokens=128,
-                do_sample=True,
-                temperature=temp
-            )[0]["generated_text"]
+            return pipe(prompt, max_new_tokens=128, temperature=temp)[0]["generated_text"]
 
-    else:
-        raise ValueError(f"Unknown model type: {kind}")
+    raise ValueError(f"Unsupported model type: {t}")
 
